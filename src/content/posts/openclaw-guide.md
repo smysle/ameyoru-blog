@@ -1,119 +1,165 @@
 ---
-title: "OpenClaw：把 AI 助手装进你的聊天软件"
+title: "OpenClaw 一周深度体验：一个自托管 AI 网关的真实面貌"
 published: 2026-03-24
-description: "OpenClaw 是一个自托管的多渠道 AI 网关，让你通过 Telegram、WhatsApp、Discord 等聊天软件与 AI 助手对话。本文介绍它的核心架构、安装部署和实际使用体验。"
+description: "从 3 月 17 日部署到今天，我用 OpenClaw + Claude Opus 4.6 跑了整整一周。这不是一篇官方文档翻译，而是一个真实用户踩过的坑、发现的惊喜、以及冷静的评价。"
 image: ""
-tags: ["AI", "Self-Hosted", "Telegram", "OpenClaw"]
+tags: ["AI", "Self-Hosted", "Telegram", "OpenClaw", "深度体验"]
 category: "技术"
 ---
 
-## OpenClaw 是什么
+## 写在前面
 
-一句话：**把 AI 编程助手塞进你的聊天软件里。**
+OpenClaw 是一个开源的自托管 AI 网关——把 Claude、GPT、Gemini 这些 AI 模型连接到你的 Telegram、WhatsApp、Discord，让你随时随地用聊天软件和 AI 对话。
 
-OpenClaw 是一个开源的自托管网关（Gateway），它在你自己的服务器上运行，连接 WhatsApp、Telegram、Discord、iMessage 等聊天平台和 AI 模型（Claude、GPT、Gemini 等），让你随时随地用手机给 AI 发消息——就像跟朋友聊天一样。
+从 3 月 17 日部署至今刚好一周。这篇不是功能列表的复读，而是**真实使用中发现的好与坏**。
+
+## 架构一句话
 
 ```
-聊天软件 (Telegram/WhatsApp/Discord...)
-        ↓
-    OpenClaw Gateway（你的服务器）
-        ↓
-    AI 模型 (Claude/GPT/Gemini...)
+聊天软件 → OpenClaw Gateway（你的服务器）→ AI 模型
 ```
 
-**不是又一个聊天机器人框架。** OpenClaw 的定位是「AI Agent 的多渠道网关」——它不只是转发消息，而是提供完整的会话管理、工具调用、多代理路由、定时任务、记忆系统等能力。
+Gateway 是中枢，所有消息经过它路由。它不只是消息转发器——它管理会话、调用工具、执行代码、记忆上下文。
 
-## 为什么需要它
+## 真正让我惊喜的地方
 
-你可能会问：ChatGPT 不是有 App 吗？Claude 不是有网页版吗？为什么还需要这个？
+### 记忆系统
 
-**几个真实场景：**
+这是 OpenClaw 最被低估的能力。它不是简单的上下文窗口——而是一个**三层记忆架构**：
 
-- 你想用 **Telegram** 随时给 AI 发消息，让它帮你管理服务器、查天气、搜资料
-- 你想让 AI 助手能 **执行 shell 命令**、读写文件、浏览网页——不只是聊天
-- 你想要一个 **记住上下文** 的助手，跨对话记得你之前说过什么
-- 你想用 **自己的 API Key**，不受官方客户端的限制
-- 你想在 **多个平台** 同时使用同一个助手——手机 Telegram、电脑 Discord、甚至 iMessage
+- **短期**：当前会话的压缩摘要（compaction 自动管理）
+- **中期**：日记文件（`memory/YYYY-MM-DD.md`），AI 主动写入
+- **长期**：`MEMORY.md`，精华蒸馏
 
-OpenClaw 满足以上所有需求，而且数据全在你自己的服务器上。
+配合**向量语义搜索**（`memory_search`），AI 能回忆起几天前的对话细节。这不是花哨的 feature——当你第三天问「之前那个代理叫什么端口来着」，它真的能翻出来。
 
-## 核心特性
+我设了两个 cron 任务：每天 14:00 和 22:00 自动同步日记，凌晨 4:00 整理压缩旧日记到周报。**AI 自己管理自己的记忆**，不需要人工维护。
 
-### 🔗 多渠道支持
+### Compaction（上下文压缩）
 
-内置支持 WhatsApp、Telegram、Discord、iMessage，通过插件还可以扩展到 Mattermost、Matrix、Slack 等。一个 Gateway 进程可以同时连接多个渠道。
+长对话不会爆上下文。OpenClaw 的 compaction 机制会在接近窗口上限时自动压缩历史，保留关键信息。我把 `contextWindow` 从 1M 调到了 500K——因为实测 Claude Opus 4.6 在 256K 内注意力准确率 93%，到 1M 降到 76%（MRCR v2 基准）。500K 是甜蜜点：够大不会频繁压缩，又不会因为 context rot 丢失注意力。
 
-### 🤖 多模型 & 多代理
+### 工具能力是真·Agent 级别
 
-支持 35+ 模型提供商：Anthropic (Claude)、OpenAI (GPT)、Google (Gemini)、以及各种自托管模型（Ollama、vLLM 等）。可以配置多个 AI 代理，每个有独立的会话空间和工具集。
+这不是「帮你搜搜网页」的水平。一周下来，我的 AI 助手做了这些事：
 
-### 🛠️ Agent 工具链
+- **安装和配置 SS 代理**：配置 4 条代理线路，写 systemd 服务，测速选优
+- **CF 过盾研究**：测试 scrapling、CloakBrowser、Camoufox 三种反检测浏览器，找到最优方案
+- **分析 GitHub 钓鱼仓库**：从混淆的 JS 代码还原完整攻击链（Base91 解码 + RCE payload 分析）
+- **给手机写代理配置**：生成 Mihomo/Surfing 模块的 YAML 配置，含 Google Play 规则和 DNS 分流
+- **部署这个博客**：从选型到建站到 Vercel 部署到 DNS 配置，全程自动
 
-这才是 OpenClaw 真正强大的地方：
+这些不是演示用例——是真实的生产力。`exec` 工具让 AI 直接操作服务器，`browser` 工具可以自动化 Chromium，`web_search` + 自定义搜索技能提供信息获取能力。
 
-- **Shell 执行**：AI 可以直接在服务器上运行命令
-- **浏览器自动化**：控制 Chromium 浏览网页、截图、填表
-- **网页搜索**：集成 Brave、Perplexity、Grok 等搜索引擎
-- **文件读写**：读取和编辑服务器上的文件
-- **定时任务（Cron）**：设置定期执行的自动化任务
-- **记忆系统**：向量搜索 + 日记式记忆管理
-- **子代理**：可以派生隔离的子任务
+### Cron 定时任务
 
-### 📱 移动节点
+不只是提醒闹钟。你可以让 AI 定期执行复杂任务——用便宜的模型（我用 Gemini Flash）跑定时脚本，主模型只处理交互对话。这是**真正的模型分工**：
 
-iOS 和 Android 节点可以配对到 Gateway，提供摄像头、屏幕录制、位置获取等设备级能力。
+- 日常对话：Claude Opus 4.6 Fast（质量高）
+- Cron 任务 + 多模态识别：Gemini 3 Flash（便宜够用）
 
-### 🎨 Skills 技能系统
+### 技能系统（Skills）
 
-类似插件的技能系统，可以给 AI 助手添加专业能力。社区有现成的技能包可以直接安装。
+Markdown 格式的技能文件，可以教 AI 新能力。我装了 15 个技能：搜索、画图（NovelAI/Gemini）、网页保存、PDF 解析、GitHub Issues 管理……社区（ClawHub）也有现成的可以装。
 
-## 安装部署
+但要注意：**ClawHub 上有恶意技能**。安全研究人员发现了超过 1100 个恶意技能分发 Atomic Stealer。安装前一定要审查内容。
 
-### 环境要求
+## 踩过的坑（这些文档不会告诉你）
 
-- Node.js 24（推荐）或 Node.js 22.16+
-- 一个 AI 模型提供商的 API Key
-- 一台服务器（VPS、树莓派、或者你的笔记本都行）
+### 安全问题是真的严重
 
-### 快速安装
+这是必须正视的事实。2026 年 2 月曝出的 **CVE-2026-25253**（CVSS 8.8）是个一键 RCE 漏洞：
+
+- 攻击者在恶意网页里用 JS 连接你本地的 `localhost:18789`
+- 通过 WebSocket 偷取 Gateway token
+- 拿到 token = 拿到完整的 shell 权限
+
+**绑定 localhost 也没用**——攻击通过受害者的浏览器中转。超过 13.5 万个 OpenClaw 实例暴露在公网上。Microsoft 的安全博客直接说「对大多数环境，合适的决定可能是不部署它」。
+
+虽然 v2026.2.25+ 已修复，但这暴露了一个根本问题：**OpenClaw 的安全模型假设只有你自己在用**。如果你部署在 VPS 上、暴露了端口、或者连接了聊天渠道——攻击面会大幅扩展。
+
+**建议**：一定要升级到最新版、设置 `gateway.bind: "loopback"`、配置 `allowFrom` 白名单、不要在公网暴露 Gateway 端口。
+
+### message 工具有 bug
+
+`message` tool 的 schema 设计有缺陷：
+
+- `buttons` 参数是全局 required 的（即使你不需要按钮），需要传空数组 `[]` 绕过
+- `edit` 动作不会自动推断当前聊天，需要显式传 `target`
+- 主动发送图片文件（`filePath`）偶尔报 `Channel is unavailable`——但同一个 channel 正常收发文字消息
+- 工具失败时会自动给用户发 ⚠️ 错误通知，暴露内部错误信息
+
+### 流式输出的 NO_REPLY 陷阱
+
+OpenClaw 是流式输出的——文字生成多少发多少。如果 AI 先输出了一段文字，最后又加了 `NO_REPLY`（表示不需要回复），前面的文字已经发到聊天软件了，后面检测到 NO_REPLY 又去删除……用户看到的就是**消息闪烁然后消失**。
+
+这个坑很隐蔽，文档也没提。
+
+### contextWindow 不是越大越好
+
+默认可以设到 1M，但 Claude Opus 4.6 在大上下文窗口下注意力会衰减。实测 MRCR v2 基准：256K 准确率 93%，1M 降到 76%。**不要因为能设大就设大**——500K 是我测出来的平衡点。
+
+### 配置门槛不低
+
+配置文件是 JSON5 格式（`~/.openclaw/openclaw.json`），功能强大但字段巨多。模型配置要手动写 provider、API、contextWindow、cost……没有 GUI，没有向导（`openclaw onboard` 只覆盖基础配置）。反代用户还得自己处理 API 格式兼容性。
+
+### dev 版和 stable 版差异
+
+dev 版（git clone）占 2.7GB，npm stable 版 579MB，功能相同。如果你不需要改源码，**用 npm 版**，省空间也方便更新。
+
+### Compaction 不触发 memory flush
+
+这个我翻源码才确认的：手动执行 `/compact` 不会触发 pre-compaction 的 memory flush。只有**自动 compaction**（上下文快满时）才会先 flush 再压缩。如果你依赖 memory flush 来保存重要信息，别手动 compact。
+
+## 和替代品的比较
+
+调研了几个同类项目：
+
+| 项目 | 语言 | 特点 | 适合谁 |
+|------|------|------|--------|
+| **OpenClaw** | Node.js | 功能最全，生态最大，但安全问题多 | 能折腾的开发者 |
+| **nanobot** | Python | 4K 行代码，26.8K 星，轻量极简 | 想要简单可控的用户 |
+| **ZeroClaw** | Rust | <5MB 二进制，WASM 沙箱 | 资源受限环境 |
+| **LoongClaw** | Rust | 团队协作向，权限管理完善 | 企业/团队 |
+
+OpenClaw 的优势是生态和功能全面性，劣势是复杂度和攻击面。如果你只需要简单的聊天转发，nanobot 可能更合适。
+
+## 实际资源占用
+
+在我的 VPS（Debian 12, 2C4G）上：
+
+- Gateway 进程本身很轻，~100MB 内存
+- 但浏览器自动化（patchright/Chromium）可以吃到 3GB
+- 加上 xvfb、SS 代理等辅助进程，日常占用约 1.5-2GB
+- 磁盘：npm 版本 ~580MB + workspace + 浏览器缓存，总共约 3-4GB
+
+## 写给想尝试的人
+
+### 最快上手路径
 
 ```bash
-# 一键安装
+# 安装
 curl -fsSL https://openclaw.ai/install.sh | bash
 
-# 运行引导设置
+# 引导配置
 openclaw onboard --install-daemon
 
-# 检查状态
-openclaw gateway status
+# 连接 Telegram（最快的渠道）
+# 找 @BotFather 创建 Bot → 拿 Token → 写入配置 → 重启
 ```
 
-引导程序会带你选择模型提供商、配置 API Key，整个过程大约 2 分钟。
+### 安全清单
 
-### 连接 Telegram
+- [ ] 升级到 v2026.2.25+（修复 CVE-2026-25253）
+- [ ] `gateway.bind` 设为 `loopback`
+- [ ] 配置 `channels.telegram.allowFrom`（只允许你自己的 ID）
+- [ ] 不要在公网暴露 18789 端口
+- [ ] 审查任何第三方技能的内容再安装
+- [ ] 定期 `openclaw update`
 
-Telegram 是最快的接入方式：
+### 模型配置建议
 
-1. 在 Telegram 找 **@BotFather**，创建一个 Bot，拿到 Token
-2. 编辑配置文件 `~/.openclaw/openclaw.json`：
-
-```json5
-{
-  channels: {
-    telegram: {
-      enabled: true,
-      botToken: "你的Bot Token",
-      allowFrom: [你的Telegram用户ID],
-    },
-  },
-}
-```
-
-3. 重启 Gateway，给你的 Bot 发消息——AI 就会回复你了
-
-### 配置模型
-
-OpenClaw 支持自定义反向代理，适合国内用户：
+如果用反代（国内用户大概率需要）：
 
 ```json5
 {
@@ -121,55 +167,31 @@ OpenClaw 支持自定义反向代理，适合国内用户：
     providers: {
       anthropic: {
         baseUrl: "https://你的反代地址",
-        apiKey: "你的API Key",
-        models: [
-          {
-            id: "claude-opus-4-6",
-            name: "Claude Opus 4.6",
-            contextWindow: 500000,
-          },
-        ],
+        apiKey: "你的Key",
+        models: [{
+          id: "claude-opus-4-6-fast",
+          contextWindow: 500000,  // 不要设1M
+          maxTokens: 128000,
+        }],
       },
     },
   },
 }
 ```
 
-## 实际使用体验
+## 结论
 
-我已经用 OpenClaw + Claude Opus 4.6 跑了一周。说说真实感受：
+OpenClaw 不是一个开箱即用的产品。它是一个**强大但粗糙的工具**，适合愿意花时间配置和维护的开发者。
 
-### 优点
+一周下来，它帮我完成了大量本来需要手动 SSH 到服务器操作的事情，记忆系统让跨会话的连续性工作成为可能，Cron 任务实现了真正的自动化。这些是实实在在的生产力提升。
 
-- **随时可用**：手机 Telegram 发消息就能用，比开网页方便太多
-- **工具能力强**：AI 能直接操作服务器，装软件、写脚本、管理文件
-- **记忆系统好用**：向量搜索 + 日记系统，AI 能记住之前的对话和决策
-- **Cron 任务**：定时同步记忆、检查服务器状态，完全自动化
-- **开源自控**：数据在自己服务器上，API Key 自己管理
+但安全问题、工具稳定性、配置复杂度——这些不是小事。如果你不愿意花时间理解它的安全模型和配置体系，**不建议部署在有敏感数据的环境**。
 
-### 不足
-
-- **文档偏英文**：中文文档不够完善
-- **部分工具不稳定**：比如 `message` tool 发图片偶尔报错
-- **配置项多**：初始配置有一定门槛，需要对 JSON5 格式比较熟悉
-- **资源占用**：Gateway 本身不重，但浏览器自动化等功能需要额外资源
-
-### 适合谁
-
-- 有自己服务器的开发者
-- 想要「随身 AI 助手」的 Power User
-- 对数据隐私有要求的用户
-- 想折腾 AI Agent 自动化的爱好者
-
-## 总结
-
-OpenClaw 不是一个完美的产品，但它解决了一个真实的问题：**让 AI 助手真正融入你的日常通讯工具**。
-
-如果你已经有一台 VPS，有 AI 模型的 API Key，花 5 分钟装一个试试。当你在地铁上用 Telegram 让 AI 帮你查看服务器状态的时候，你会觉得这 5 分钟花得值。
+**评分：7/10** — 功能强大，生态活跃，但安全和稳定性还需要打磨。
 
 ---
 
 - 官网：[openclaw.ai](https://openclaw.ai)
 - 文档：[docs.openclaw.ai](https://docs.openclaw.ai)
 - GitHub：[github.com/openclaw/openclaw](https://github.com/openclaw/openclaw)
-- 社区 Discord：[discord.com/invite/clawd](https://discord.com/invite/clawd)
+- 安全公告：[CVE-2026-25253](https://thehackernews.com/2026/02/openclaw-bug-enables-one-click-remote.html)
